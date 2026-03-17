@@ -6,7 +6,8 @@
     "permissions": [
         "notifications",
         "bookmarks", 
-        "storage"
+        "storage",
+        "cookies"
     ],
     "host_permissions": [
         "http://*/*", 

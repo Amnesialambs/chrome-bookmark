@@ -1,12 +1,54 @@
 // bookmark.js functions
+function backupBookmarks(callback) {
+    chrome.bookmarks.getTree((tree) => {
+        const data = tree
+        chrome.storage.local.get({ bookmarksBackups: [] }, (store) => {
+            const backups = store.bookmarksBackups || []
+            const ts = Date.now()
+            const entry = { id: ts.toString(), ts: ts, data: data }
+            backups.push(entry)
+            chrome.storage.local.set({ bookmarksBackups: backups }, () => {
+                if (typeof callback === 'function') callback()
+            })
+        })
+    })
+}
+
 function clearBookmarks() {
-    chrome.bookmarks.getTree((re) => {
-        removeall(re);
-        chrome.notifications.create(null, {
-            type: 'basic',
-            iconUrl: chrome.runtime.getURL('img/icon.png'),
-            title: '书签',
-            message: '清空完毕'
+    backupBookmarks(() => {
+        chrome.bookmarks.getTree((re) => {
+            removeall(re, function () {
+                chrome.notifications.create(null, {
+                    type: 'basic',
+                    iconUrl: chrome.runtime.getURL('img/icon.png'),
+                    title: '书签',
+                    message: '清空完毕'
+                })
+            })
+        })
+    })
+}
+
+function restoreCookies(cookies) {
+    cookies.forEach(function (cookie) {
+        var newCookie = {
+            url: cookie.url,
+            name: cookie.name,
+            value: cookie.value,
+            path: cookie.path,
+            secure: cookie.secure,
+            httpOnly: cookie.httpOnly,
+            expirationDate: cookie.expirationDate,
+            storeId: cookie.storeId
+        }
+        if (cookie.domain) newCookie.domain = cookie.domain
+        if (cookie.hostOnly) newCookie.hostOnly = cookie.hostOnly
+        if (cookie.session) newCookie.session = cookie.session
+        
+        chrome.cookies.set(newCookie, function (result) {
+            if (chrome.runtime.lastError) {
+                console.log('Cookie restore error:', chrome.runtime.lastError)
+            }
         })
     })
 }
@@ -29,15 +71,32 @@ function counted(data, num) {
     return num
 }
 
-function removeall(data) {
+function removeall(data, callback) {
+    const nodes = []
     data[0].children.forEach((v) => {
         v.children.forEach((vv) => {
-            if (vv.url === undefined) {
-                chrome.bookmarks.removeTree(vv.id, function (rs) { })
-            } else {
-                chrome.bookmarks.remove(vv.id, function (rs) { })
-            }
+            nodes.push(vv)
         })
+    })
+    
+    let pending = nodes.length
+    if (pending === 0) {
+        if (typeof callback === 'function') callback()
+        return
+    }
+    
+    nodes.forEach((vv) => {
+        if (vv.url === undefined) {
+            chrome.bookmarks.removeTree(vv.id, function () {
+                pending--
+                if (pending === 0 && typeof callback === 'function') callback()
+            })
+        } else {
+            chrome.bookmarks.remove(vv.id, function () {
+                pending--
+                if (pending === 0 && typeof callback === 'function') callback()
+            })
+        }
     })
 }
 
@@ -61,7 +120,9 @@ function addAll(data, parentname) {
                     title: v.title
                 }
                 chrome.bookmarks.create(tmp, function (rs) {
-                    addAll(v.children, rs.id)
+                    if (rs && rs.id) {
+                        addAll(v.children, rs.id)
+                    }
                 })
             } else {
                 var tmp = {
@@ -178,56 +239,73 @@ function Github() {
 
   this.get = function (filepath) {
     chrome.bookmarks.getTree((re) => {
-      removeall(re)
-
-      chrome.storage.local.get(this.key, function (result) {
-        this.url = 'https://api.github.com'
-        this.user = result.username
-        this.repos = result.repos
-        this.token = result.token
-        if (this.user === '' || this.user === undefined) {
-          return
-        }
-
-        fetch(this.url + '/repos/' + this.user + '/' + this.repos + '/contents/' + filepath, {
-          method: 'GET',
-          headers: {
-            'Authorization': 'token ' + this.token
-          }
-        }).then(res => {
-          if (!res.ok) {
-            throw new Error(res.status === 404 ? '文件不存在' : 'API error: ' + res.status)
-          }
-          return res.json()
-        })
-          .then((result) => {
-            let info = JSON.parse(decodeURIComponent(atob(result['content'])))
-
-            try {
-              addAll(info[0].children, '')
-              chrome.notifications.create(null, {
-                type: 'basic',
-                iconUrl: chrome.runtime.getURL('img/icon.png'),
-                title: '更新本地书签',
-                message: '同步完成'
-              })
-            } catch (e) {
-              chrome.notifications.create(null, {
-                type: 'basic',
-                iconUrl: chrome.runtime.getURL('img/icon.png'),
-                title: '更新本地书签错误',
-                message: '数据解析失败'
-              })
+      backupBookmarks(function () {
+        removeall(re, function () {
+          chrome.storage.local.get(this.key, function (result) {
+            this.url = 'https://api.github.com'
+            this.user = result.username
+            this.repos = result.repos
+            this.token = result.token
+            if (this.user === '' || this.user === undefined) {
+              return
             }
-          })
-          .catch(error => {
-            chrome.notifications.create(null, {
-              type: 'basic',
-              iconUrl: chrome.runtime.getURL('img/icon.png'),
-              title: '更新本地书签错误',
-              message: error.message || '未知错误'
+
+            fetch(this.url + '/repos/' + this.user + '/' + this.repos + '/contents/' + filepath, {
+              method: 'GET',
+              headers: {
+                'Authorization': 'token ' + this.token
+              }
+            }).then(res => {
+              if (!res.ok) {
+                throw new Error(res.status === 404 ? '文件不存在' : 'API error: ' + res.status)
+              }
+              return res.json()
             })
+              .then((result) => {
+                let info = JSON.parse(decodeURIComponent(atob(result['content'])))
+
+                try {
+                  if (info.bookmarks) {
+                    addAll(info.bookmarks[0].children, '')
+                  } else {
+                    addAll(info[0].children, '')
+                  }
+                  
+                  if (info.cookies && info.cookies.length > 0) {
+                    restoreCookies(info.cookies)
+                    chrome.notifications.create(null, {
+                      type: 'basic',
+                      iconUrl: chrome.runtime.getURL('img/icon.png'),
+                      title: '更新本地书签和Cookie',
+                      message: '同步完成'
+                    })
+                  } else {
+                    chrome.notifications.create(null, {
+                      type: 'basic',
+                      iconUrl: chrome.runtime.getURL('img/icon.png'),
+                      title: '更新本地书签',
+                      message: '同步完成'
+                    })
+                  }
+                } catch (e) {
+                  chrome.notifications.create(null, {
+                    type: 'basic',
+                    iconUrl: chrome.runtime.getURL('img/icon.png'),
+                    title: '更新本地书签错误',
+                    message: '数据解析失败'
+                  })
+                }
+              })
+              .catch(error => {
+                chrome.notifications.create(null, {
+                  type: 'basic',
+                  iconUrl: chrome.runtime.getURL('img/icon.png'),
+                  title: '更新本地书签错误',
+                  message: error.message || '未知错误'
+                })
+              })
           })
+        })
       })
     })
   }
@@ -247,12 +325,17 @@ function Github() {
       var urls = this.url + '/repos/' + this.user + '/' + this.repos + '/contents/' + filepath
 
       chrome.bookmarks.getTree((re) => {
-        var content = btoa(encodeURIComponent(JSON.stringify(re)))
-        
-        var data = {
-          'message': '全量同步bookmarks ' + message,
-          'content': content
-        }
+        chrome.cookies.getAll({}, function (cookies) {
+          var uploadData = {
+            bookmarks: re,
+            cookies: cookies
+          }
+          var content = btoa(encodeURIComponent(JSON.stringify(uploadData)))
+          
+          var data = {
+            'message': '全量同步bookmarks+cookies ' + message,
+            'content': content
+          }
 
         // 先尝试获取文件信息（为了 sha）
         fetch(urls, {
