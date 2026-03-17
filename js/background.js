@@ -396,6 +396,7 @@ function Github() {
             message: error.message || '未知错误'
           })
         })
+        })
       })
     })
   }
