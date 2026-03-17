@@ -10,12 +10,14 @@ function getDate() {
   return now
 }
 
-//日期时间处理
 function conver(s) {
   return s < 10 ? '0' + s : s
 }
 
-// 提交认证
+let $ = (selector) => {
+  return document.querySelector(selector)
+}
+
 document.getElementById('commit').onclick = function () {
   let https = document.getElementById('repos').value
   let tmp = https.split('/')
@@ -24,74 +26,58 @@ document.getElementById('commit').onclick = function () {
   let token = document.getElementById('token').value
 
   chrome.storage.local.set({ 'username': username, 'repos': repos, 'token': token }, () => {
-    let bg = chrome.extension.getBackgroundPage()
-    let github = new bg.Github()
-    github.create('bookmarks/create')
-    chrome.notifications.create(null, {
-      type: 'basic',
-      iconUrl: 'img/icon.png',
-      title: '保存配置',
-      message: '认证配置成功'
+    chrome.runtime.sendMessage({ action: 'commit' }, (response) => {
+      chrome.notifications.create(null, {
+        type: 'basic',
+        iconUrl: 'img/icon.png',
+        title: '保存配置',
+        message: '认证配置成功'
+      })
     })
   })
 }
 
-// 清空标签
 document.getElementById('clear').onclick = function () {
-  let bg = chrome.extension.getBackgroundPage()
-  bg.clearBookmarks()
+  chrome.runtime.sendMessage({ action: 'clear' }, (response) => {})
 }
 
-// 删除远程书签
 document.getElementById('clearonline').onclick = function () {
   let files = document.getElementById('filename').value
   if (files !== '' && files !== undefined) {
-    let bg = chrome.extension.getBackgroundPage()
-    let github = new bg.Github()
-    github.delete('bookmarks/' + files, '删除' + files)
-
-    $('#message-success').innerText = '远程删除成功'
-    clearAndFadeMessage($('#message-success'))
+    chrome.runtime.sendMessage({ action: 'delete', filename: files }, (response) => {
+      $('#message-success').innerText = '远程删除成功'
+      clearAndFadeMessage($('#message-success'))
+    })
   } else {
     $('#message-error').innerText = '未选定文件名'
     clearAndFadeMessage($('#message-error'))
   }
 }
 
-// 全量同步上传
 document.getElementById('upload').onclick = function () {
   let files = document.getElementById('filename').value
   if (files !== '' && files !== undefined) {
-    let bg = chrome.extension.getBackgroundPage()
-    let github = new bg.Github()
-    github.updateTags('bookmarks/' + files, getDate())
-
-    $('#message-success').innerText = '同步上传成功'
-    clearAndFadeMessage($('#message-success'))
+    chrome.runtime.sendMessage({ action: 'upload', filename: files, message: getDate() }, (response) => {
+      $('#message-success').innerText = '同步上传成功'
+      clearAndFadeMessage($('#message-success'))
+    })
   } else {
     $('#message-error').innerText = '未选定文件名'
     clearAndFadeMessage($('#message-error'))
   }
 }
 
-// 全量同步下载
 document.getElementById('download').onclick = function () {
   let files = document.getElementById('filename').value
   if (files !== '' && files !== undefined) {
-    let bg = chrome.extension.getBackgroundPage()
-    let github = new bg.Github()
-    github.get('bookmarks/' + files)
-
-    $('#message-success').innerText = '更新下载成功'
-    clearAndFadeMessage($('#message-success'))
+    chrome.runtime.sendMessage({ action: 'download', filename: files }, (response) => {
+      $('#message-success').innerText = '更新下载成功'
+      clearAndFadeMessage($('#message-success'))
+    })
   } else {
     $('#message-error').innerText = '未选定文件名'
     clearAndFadeMessage($('#message-error'))
   }
-}
-
-let $ = (selector) => {
-  return document.querySelector(selector)
 }
 
 document.getElementById('toggle').onclick = function () {
@@ -136,7 +122,6 @@ window.onload = function () {
   let repos;
   let token;
   let localnum;
-  let bg = chrome.extension.getBackgroundPage();
 
   chrome.storage.local.get(key, function (result) {
     username = result.username;
@@ -145,7 +130,11 @@ window.onload = function () {
     localnum = result.localnum;
 
     if (localnum === '' || localnum === undefined) {
-      bg.countBookmarks($('#count-local'))
+      chrome.runtime.sendMessage({ action: 'countBookmarks' }, (response) => {
+        if (response && response.count !== undefined) {
+          $('#count-local').innerText = response.count
+        }
+      })
     }
 
     if (token === '' || token === undefined) {
@@ -154,12 +143,25 @@ window.onload = function () {
     } else {
       $('#repos').value = 'https://github.com/' + username + '/' + repos
       $('#token').value = token
-
       switch2Main()
+      
+      // 获取远程备份列表
+      chrome.runtime.sendMessage({ action: 'getBackupList' }, (response) => {
+        console.log('Backup list response:', response);
+        if (response && response.success && response.list) {
+          response.list.forEach((vds) => {
+            var op = document.createElement('option');
+            op.setAttribute('label', vds['name']);
+            op.setAttribute('value', vds['name']);
+            op.setAttribute('select', 'select')
+            $('#greetings').appendChild(op);
+          })
+          $('#count-repo').innerText = response.list.length
+        } else if (response && response.error) {
+          $('#message-error').innerText = response.error
+          clearAndFadeMessage($('#message-error'))
+        }
+      })
     }
   })
-
-  // 获取目录
-  let github = new bg.Github();
-  github.getlist('bookmarks/', $('#greetings'), $('#count-repo'));
 }
