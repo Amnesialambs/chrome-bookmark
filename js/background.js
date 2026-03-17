@@ -99,28 +99,42 @@ function Github() {
       this.repos = result.repos
       this.token = result.token
       if (this.user === '' || this.user === undefined) {
-        alert('未配置认证信息')
+        chrome.notifications.create(null, {
+          type: 'basic',
+          iconUrl: chrome.runtime.getURL('img/icon.png'),
+          title: '初始化失败',
+          message: '未配置认证信息'
+        })
         return
       }
 
       fetch(this.url + '/repos/' + this.user + '/' + this.repos + '/contents/' + filepath, {
         method: 'PUT',
         body: JSON.stringify(data),
-        headers: new Headers({
+        headers: {
           'Content-Type': 'application/json',
           'Authorization': 'token ' + this.token
-        })
+        }
       }).then(res => res.json())
+        .then((response) => {
+          if (response && response.content) {
+            console.log('初始化目录' + filepath + ' 成功')
+          } else if (response && response.message) {
+            chrome.notifications.create(null, {
+              type: 'basic',
+              iconUrl: chrome.runtime.getURL('img/icon.png'),
+              title: '初始化失败',
+              message: response.message
+            })
+          }
+        })
         .catch((error) => {
           chrome.notifications.create(null, {
             type: 'basic',
             iconUrl: chrome.runtime.getURL('img/icon.png'),
-            title: '初始化' + filepath + '目录',
-            message: error
+            title: '初始化失败',
+            message: error.message || '未知错误'
           })
-        })
-        .then((response) => {
-          console.log('初始化目录' + filepath + ' 成功')
         })
     })
   }
@@ -137,14 +151,17 @@ function Github() {
 
       fetch(this.url + '/repos/' + this.user + '/' + this.repos + '/contents/' + filepath, {
         method: 'GET',
-        headers: new Headers({
-          'Content-Type': 'application/json',
+        headers: {
           'Authorization': 'token ' + this.token
-        })
-      }).then(res => res.json())
-        .catch(error => console.error('Error:', error))
+        }
+      }).then(res => {
+        if (!res.ok) {
+          throw new Error(res.status === 404 ? '目录不存在' : 'API error: ' + res.status)
+        }
+        return res.json()
+      })
         .then((result) => {
-          if (element && elenum) {
+          if (element && elenum && Array.isArray(result)) {
             result.forEach((vds) => {
               var op = document.createElement('option');
               op.setAttribute('label', vds['name']);
@@ -155,6 +172,7 @@ function Github() {
             elenum.innerText = result.length
           }
         })
+        .catch(error => console.error('Error:', error))
     })
   }
 
@@ -173,26 +191,42 @@ function Github() {
 
         fetch(this.url + '/repos/' + this.user + '/' + this.repos + '/contents/' + filepath, {
           method: 'GET',
-          headers: new Headers({
-            'Content-Type': 'application/json',
+          headers: {
             'Authorization': 'token ' + this.token
-          })
-        }).then(res => res.json())
-          .catch(error => console.error('Error:', error))
+          }
+        }).then(res => {
+          if (!res.ok) {
+            throw new Error(res.status === 404 ? '文件不存在' : 'API error: ' + res.status)
+          }
+          return res.json()
+        })
           .then((result) => {
             let info = JSON.parse(decodeURIComponent(atob(result['content'])))
 
             try {
               addAll(info[0].children, '')
-            } catch (e) {
-            } finally {
               chrome.notifications.create(null, {
                 type: 'basic',
                 iconUrl: chrome.runtime.getURL('img/icon.png'),
                 title: '更新本地书签',
-                message: '同步完成 '
+                message: '同步完成'
+              })
+            } catch (e) {
+              chrome.notifications.create(null, {
+                type: 'basic',
+                iconUrl: chrome.runtime.getURL('img/icon.png'),
+                title: '更新本地书签错误',
+                message: '数据解析失败'
               })
             }
+          })
+          .catch(error => {
+            chrome.notifications.create(null, {
+              type: 'basic',
+              iconUrl: chrome.runtime.getURL('img/icon.png'),
+              title: '更新本地书签错误',
+              message: error.message || '未知错误'
+            })
           })
       })
     })
@@ -297,37 +331,64 @@ function Github() {
 
       fetch(urls, {
         method: 'GET',
-        headers: new Headers({
-          'Content-Type': 'application/json',
+        headers: {
           'Authorization': 'token ' + this.token
-        })
-      }).then(res => res.json())
-        .catch(error => console.error('Error:', error))
-        .then((result) => {
-          var data = {
-            'message': message,
-            'branch': 'master',
-            'sha': result['sha']
+        }
+      }).then(res => {
+        if (!res.ok) {
+          if (res.status === 404) {
+            chrome.notifications.create(null, {
+              type: 'basic',
+              iconUrl: chrome.runtime.getURL('img/icon.png'),
+              title: '书签删除',
+              message: '文件不存在: ' + filepath
+            })
           }
+          throw new Error('API error: ' + res.status)
+        }
+        return res.json()
+      })
+      .then(result => {
+        var data = {
+          'message': message,
+          'sha': result['sha']
+        }
 
-          fetch(urls, {
-            method: 'DELETE',
-            body: JSON.stringify(data),
-            headers: new Headers({
-              'Content-Type': 'application/json',
-              'Authorization': 'token ' + this.token
-            })
-          }).then(res => res.json())
-            .catch(error => console.error('Error:', error))
-            .then((response) => {
-              chrome.notifications.create(null, {
-                type: 'basic',
-                iconUrl: chrome.runtime.getURL('img/icon.png'),
-                title: '书签删除',
-                message: '远程书签 ' + filepath + ' 删除完毕！'
-              })
-            })
+        return fetch(urls, {
+          method: 'DELETE',
+          body: JSON.stringify(data),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'token ' + this.token
+          }
         })
+      })
+      .then(res => res.json())
+      .then(response => {
+        if (response && response.content === null) {
+          chrome.notifications.create(null, {
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('img/icon.png'),
+            title: '书签删除',
+            message: '远程书签 ' + filepath + ' 删除完毕！'
+          })
+        } else if (response && response.message) {
+          chrome.notifications.create(null, {
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('img/icon.png'),
+            title: '书签删除错误',
+            message: response.message
+          })
+        }
+      })
+      .catch(error => {
+        chrome.notifications.create(null, {
+          type: 'basic',
+          iconUrl: chrome.runtime.getURL('img/icon.png'),
+          title: '书签删除错误',
+          message: error.message || '未知错误'
+        })
+      })
     })
   }
 }
